@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # Integration tests start PostgreSQL, Redis and Kafka with Testcontainers.
+      - name: Build and run all tests
+        run: ./mvnw -B verify
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: "**/target/*-reports/"
+
+  smoke:
+    name: Docker Compose smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start the full stack
+        run: docker compose up -d --build --wait
+        env:
+          PAYMENT_FAILURE_RATE: "0"
+
+      - name: Run end-to-end smoke test
+        run: ./scripts/smoke-test.sh
+
+      - name: Service logs
+        if: failure()
+        run: docker compose logs booking-service payment-service
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
