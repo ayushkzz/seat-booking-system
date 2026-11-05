@@ -1,0 +1,58 @@
+server:
+  port: ${PORT:8081}
+
+spring:
+  application:
+    name: payment-service
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments}
+    username: ${DB_USER:payment}
+    password: ${DB_PASSWORD:payment}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+    consumer:
+      group-id: payment-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # booking.created is consumed with this many threads (one per partition at most)
+      concurrency: 3
+
+payment:
+  simulation:
+    # Share of charges that are randomly declined.
+    failure-rate: ${PAYMENT_FAILURE_RATE:0.1}
+    # Simulated provider latency, picked uniformly between min and max.
+    latency-min: PT0.05S
+    latency-max: PT0.3S
+    # Users whose id starts with this prefix are always declined (handy for demos and tests).
+    decline-user-prefix: decline
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
