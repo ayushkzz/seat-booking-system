@@ -6,6 +6,8 @@ COPY pom.xml .
 COPY common common
 COPY booking-service booking-service
 COPY payment-service payment-service
+COPY notification-service notification-service
+COPY gateway gateway
 RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -q -pl ${SERVICE} -am package -DskipTests
 

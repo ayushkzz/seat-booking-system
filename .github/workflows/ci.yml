@@ -52,7 +52,7 @@ jobs:
 
       - name: Service logs
         if: failure()
-        run: docker compose logs booking-service payment-service
+        run: docker compose logs gateway booking-service payment-service notification-service
 
       - name: Stop the stack
         if: always()
