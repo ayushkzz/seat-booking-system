@@ -1,0 +1,28 @@
+# Settings used for the load test, on top of docker-compose.yml (see scripts/load-test.sh).
+# The simulated payment provider is made fast and reliable so the test measures this system,
+# not the artificial delay, and the saga gets more partitions and consumers to keep up.
+
+x-saga: &saga
+  KAFKA_TOPIC_PARTITIONS: "12"
+  KAFKA_LISTENER_CONCURRENCY: "12"
+
+services:
+  kafka:
+    environment:
+      KAFKA_NUM_PARTITIONS: 12
+
+  booking-service:
+    environment:
+      <<: *saga
+      DB_POOL_SIZE: "30"
+
+  payment-service:
+    environment:
+      <<: *saga
+      PAYMENT_FAILURE_RATE: "0.05"
+      PAYMENT_LATENCY_MIN: PT0.01S
+      PAYMENT_LATENCY_MAX: PT0.05S
+
+  notification-service:
+    environment:
+      <<: *saga
