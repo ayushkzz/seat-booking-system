@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "booking-service",
+      "request": "launch",
+      "mainClass": "io.github.ayushkzz.seatbooking.booking.BookingServiceApplication",
+      "projectName": "booking-service"
+    },
+    {
+      "type": "java",
+      "name": "payment-service",
+      "request": "launch",
+      "mainClass": "io.github.ayushkzz.seatbooking.payment.PaymentServiceApplication",
+      "projectName": "payment-service",
+      "env": {
+        "PAYMENT_FAILURE_RATE": "0"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Both services",
+      "configurations": ["booking-service", "payment-service"]
+    }
+  ]
+}

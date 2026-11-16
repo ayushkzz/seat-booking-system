@@ -41,6 +41,12 @@ jobs:
         env:
           PAYMENT_FAILURE_RATE: "0"
 
+      # Local development runs the services outside Docker, so Kafka must answer on localhost too.
+      - name: Check Kafka is reachable from the host
+        run: >
+          docker run --rm --network host apache/kafka:4.1.0
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
       - name: Run end-to-end smoke test
         run: ./scripts/smoke-test.sh
 

@@ -1,0 +1,198 @@
+{
+  "info": {
+    "name": "Seat Booking System",
+    "description": "Walks through the booking saga. Run the requests in order (or use the Collection Runner): each one saves the ids the next one needs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "bookingUrl", "value": "http://localhost:8080" },
+    { "key": "paymentUrl", "value": "http://localhost:8081" }
+  ],
+  "item": [
+    {
+      "name": "Health: booking-service",
+      "request": { "method": "GET", "header": [], "url": "{{bookingUrl}}/actuator/health" },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('booking-service is UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+        ] } }
+      ]
+    },
+    {
+      "name": "Health: payment-service",
+      "request": { "method": "GET", "header": [], "url": "{{paymentUrl}}/actuator/health" },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('payment-service is UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+        ] } }
+      ]
+    },
+    {
+      "name": "Create show",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{bookingUrl}}/api/shows",
+        "description": "Creates a show with rows A-C and 5 seats per row. Saves its id for the next requests.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Postman Night\",\n  \"venue\": \"Main Hall\",\n  \"startsAt\": \"2099-01-01T19:30:00Z\",\n  \"rows\": 3,\n  \"seatsPerRow\": 5,\n  \"priceCents\": 25000\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('201 Created', () => pm.response.to.have.status(201));",
+          "pm.collectionVariables.set('showId', pm.response.json().id);"
+        ] } }
+      ]
+    },
+    {
+      "name": "Seat map",
+      "request": { "method": "GET", "header": [], "url": "{{bookingUrl}}/api/shows/{{showId}}/seats" },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('200 OK', () => pm.response.to.have.status(200));",
+          "const seats = pm.response.json().seats;",
+          "pm.collectionVariables.set('seat1', seats[0].id);",
+          "pm.collectionVariables.set('seat2', seats[1].id);",
+          "pm.collectionVariables.set('seat3', seats[2].id);"
+        ] } }
+      ]
+    },
+    {
+      "name": "Book two seats",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+        ],
+        "url": "{{bookingUrl}}/api/shows/{{showId}}/bookings",
+        "description": "Holds the seats and starts payment. A new Idempotency-Key is generated for each run.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"ayush\",\n  \"seatIds\": [{{seat1}}, {{seat2}}]\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      },
+      "event": [
+        { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+          "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+        ] } },
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('201 Created', () => pm.response.to.have.status(201));",
+          "pm.test('waiting for payment', () => pm.expect(pm.response.json().status).to.eql('PENDING_PAYMENT'));",
+          "pm.collectionVariables.set('bookingId', pm.response.json().id);"
+        ] } }
+      ]
+    },
+    {
+      "name": "Retry with the same Idempotency-Key",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+        ],
+        "url": "{{bookingUrl}}/api/shows/{{showId}}/bookings",
+        "description": "Same key and same request: the original booking comes back instead of a second one.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"ayush\",\n  \"seatIds\": [{{seat1}}, {{seat2}}]\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('200 OK, not a second booking', () => pm.response.to.have.status(200));",
+          "pm.test('same booking returned', () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('bookingId')));"
+        ] } }
+      ]
+    },
+    {
+      "name": "Someone else tries a taken seat",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{$guid}}" }
+        ],
+        "url": "{{bookingUrl}}/api/shows/{{showId}}/bookings",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"someone-else\",\n  \"seatIds\": [{{seat2}}]\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+          "pm.test('seat-unavailable', () => pm.expect(pm.response.json().code).to.eql('seat-unavailable'));"
+        ] } }
+      ]
+    },
+    {
+      "name": "Booking status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{bookingUrl}}/api/bookings/{{bookingId}}",
+        "description": "CONFIRMED when the simulated payment succeeds. CANCELLED if it was randomly declined (PAYMENT_FAILURE_RATE). Send again if it still says PENDING_PAYMENT."
+      },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('200 OK', () => pm.response.to.have.status(200));",
+          "pm.test('has a status', () => pm.expect(pm.response.json().status).to.be.oneOf(['PENDING_PAYMENT', 'CONFIRMED', 'CANCELLED']));"
+        ] } }
+      ]
+    },
+    {
+      "name": "Book with a card that gets declined",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{$guid}}" }
+        ],
+        "url": "{{bookingUrl}}/api/shows/{{showId}}/bookings",
+        "description": "User ids starting with \"decline\" always have their payment declined.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"decline-demo\",\n  \"seatIds\": [{{seat3}}]\n}",
+          "options": { "raw": { "language": "json" } }
+        }
+      },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('201 Created', () => pm.response.to.have.status(201));",
+          "pm.collectionVariables.set('declinedBookingId', pm.response.json().id);"
+        ] } }
+      ]
+    },
+    {
+      "name": "Declined booking status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{bookingUrl}}/api/bookings/{{declinedBookingId}}",
+        "description": "Becomes CANCELLED once the payment is declined, and its seat is released. Send again if it still says PENDING_PAYMENT."
+      },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('200 OK', () => pm.response.to.have.status(200));",
+          "pm.test('never confirmed', () => pm.expect(pm.response.json().status).to.be.oneOf(['PENDING_PAYMENT', 'CANCELLED']));"
+        ] } }
+      ]
+    },
+    {
+      "name": "Seat map after bookings",
+      "request": { "method": "GET", "header": [], "url": "{{bookingUrl}}/api/shows/{{showId}}/seats" },
+      "event": [
+        { "listen": "test", "script": { "type": "text/javascript", "exec": [
+          "pm.test('200 OK', () => pm.response.to.have.status(200));"
+        ] } }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# Keep line endings correct on every OS. Shell scripts and files mounted into Linux
+# containers must stay LF even when the repo is cloned on Windows.
+* text=auto
+
+*.sh        text eol=lf
+mvnw        text eol=lf
+Dockerfile  text eol=lf
+*.sql       text eol=lf
+*.yml       text eol=lf
+*.cmd       text eol=crlf
+
+*.jar       binary

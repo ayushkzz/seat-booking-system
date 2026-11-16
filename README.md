@@ -145,8 +145,11 @@ The integration tests start the whole service against real PostgreSQL, Redis and
 - hold expiry, then a late payment → refund requested
 - payment-service charging once per booking under redelivery, declines and refunds
 
-To run against local services instead of containers, start PostgreSQL (with `bookings_test` and
-`payments_test` databases), Redis and Kafka on their default ports and run:
+To reuse the Docker Compose infrastructure instead of starting new containers each time:
+
+```bash
+docker compose up -d postgres redis kafka
+```
 
 ```bash
 ITEST_LOCAL=true ./mvnw verify
@@ -154,6 +157,12 @@ ITEST_LOCAL=true ./mvnw verify
 
 `scripts/smoke-test.sh` runs the full saga end to end against running services. CI runs it against
 the Docker Compose stack on every push.
+
+## Local development
+
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) covers setting up your machine, running the services
+from an IDE against the Docker infrastructure, the Postman collection, configuration and
+troubleshooting.
 
 ## Observability
 
@@ -169,6 +178,8 @@ common/            event records and topic names shared by the services
 booking-service/   shows, seat holds, bookings, outbox relay, saga handlers, expiry job
 payment-service/   simulated payment provider; idempotent charges and refunds
 scripts/           end-to-end smoke test
+postman/           Postman collection that walks through the booking saga
+docs/              local development guide
 docker/            PostgreSQL init script (one database per service)
 ```
 
