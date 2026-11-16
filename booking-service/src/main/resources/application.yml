@@ -11,6 +11,8 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/bookings}
     username: ${DB_USER:booking}
     password: ${DB_PASSWORD:booking}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
   jpa:
     open-in-view: false
     hibernate:
@@ -37,6 +39,9 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # payment results are consumed with this many threads (one per partition at most)
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:3}
   mvc:
     problemdetails:
       enabled: true
@@ -48,6 +53,8 @@ booking:
   expiry-scan-interval: PT5S
   # How often the outbox relay publishes pending events to Kafka.
   outbox-poll-interval: PT0.1S
+  # How long a rendered seat map is served from Redis, i.e. how stale a seat map can be.
+  seat-map-cache-ttl: ${SEAT_MAP_CACHE_TTL:PT1S}
 
 management:
   endpoints:
@@ -61,3 +68,6 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

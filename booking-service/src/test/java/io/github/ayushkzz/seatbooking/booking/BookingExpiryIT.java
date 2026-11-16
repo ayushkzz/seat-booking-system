@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
+import io.github.ayushkzz.seatbooking.common.events.BookingExpired;
 import io.github.ayushkzz.seatbooking.common.events.PaymentCompleted;
 import io.github.ayushkzz.seatbooking.common.events.RefundRequested;
 import io.github.ayushkzz.seatbooking.common.events.Topics;
@@ -32,7 +33,12 @@ class BookingExpiryIT extends AbstractIntegrationTest {
         UUID bookingId = UUID.fromString(body(book(show, "judy", unique("key"), seat)).get("id").asString());
 
         await().atMost(Duration.ofSeconds(20)).until(() -> bookingStatus(bookingId).equals("EXPIRED"));
-        assertThat(seatMap(show).get("summary").get("AVAILABLE").asInt()).isEqualTo(1);
+        awaitSeatCount(show, "AVAILABLE", 1);
+        try (var probe = new KafkaProbe(bootstrapServers, Topics.BOOKING_EXPIRED)) {
+            var expired = json.readValue(probe.awaitValue(bookingId.toString(), Duration.ofSeconds(20)),
+                    BookingExpired.class);
+            assertThat(expired.userId()).isEqualTo("judy");
+        }
 
         // The payment provider answers after the hold ran out: the saga compensates with a refund.
         kafka.send(Topics.PAYMENT_COMPLETED, bookingId.toString(), json.writeValueAsString(

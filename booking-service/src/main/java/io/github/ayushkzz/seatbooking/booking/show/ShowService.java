@@ -39,11 +39,11 @@ public class ShowService {
     }
 
     @Transactional(readOnly = true)
-    public List<Seat> seatMap(long showId) {
+    public List<SeatView> seatMap(long showId) {
         if (!shows.existsById(showId)) {
             throw ApiException.showNotFound(showId);
         }
-        return seats.findByShowIdOrderById(showId);
+        return seats.seatMap(showId);
     }
 
     @Transactional(readOnly = true)

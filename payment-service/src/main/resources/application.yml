@@ -32,15 +32,15 @@ spring:
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     listener:
       # booking.created is consumed with this many threads (one per partition at most)
-      concurrency: 3
+      concurrency: ${KAFKA_LISTENER_CONCURRENCY:3}
 
 payment:
   simulation:
     # Share of charges that are randomly declined.
     failure-rate: ${PAYMENT_FAILURE_RATE:0.1}
     # Simulated provider latency, picked uniformly between min and max.
-    latency-min: PT0.05S
-    latency-max: PT0.3S
+    latency-min: ${PAYMENT_LATENCY_MIN:PT0.05S}
+    latency-max: ${PAYMENT_LATENCY_MAX:PT0.3S}
     # Users whose id starts with this prefix are always declined (handy for demos and tests).
     decline-user-prefix: decline
 
@@ -56,3 +56,6 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

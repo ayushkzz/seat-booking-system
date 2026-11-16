@@ -1,9 +1,11 @@
 package io.github.ayushkzz.seatbooking.booking;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.awaitility.Awaitility;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -18,6 +20,8 @@ import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Boots the whole service against real PostgreSQL, Redis and Kafka. By default they run in
@@ -104,6 +108,12 @@ public abstract class AbstractIntegrationTest {
 
     protected JsonNode seatMap(long showId) {
         return body(http().get().uri("/api/shows/{id}/seats", showId).retrieve().toEntity(String.class));
+    }
+
+    /** Waits until the seat map shows this many seats in a status (seat maps are cached for a second). */
+    protected void awaitSeatCount(long showId, String status, int expected) {
+        Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(seatMap(showId).get("summary").path(status).asInt(0)).isEqualTo(expected));
     }
 
     protected ResponseEntity<String> book(long showId, String userId, String idempotencyKey, Long... seatIds) {

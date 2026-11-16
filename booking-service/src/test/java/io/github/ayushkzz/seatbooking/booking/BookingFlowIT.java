@@ -13,10 +13,13 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import io.github.ayushkzz.seatbooking.booking.booking.BookingRepository;
+import io.github.ayushkzz.seatbooking.common.events.BookingCancelled;
+import io.github.ayushkzz.seatbooking.common.events.BookingConfirmed;
 import io.github.ayushkzz.seatbooking.common.events.BookingCreated;
 import io.github.ayushkzz.seatbooking.common.events.PaymentCompleted;
 import io.github.ayushkzz.seatbooking.common.events.PaymentFailed;
 import io.github.ayushkzz.seatbooking.common.events.Topics;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,6 +42,9 @@ class BookingFlowIT extends AbstractIntegrationTest {
     @Autowired
     StringRedisTemplate redis;
 
+    @Autowired
+    MeterRegistry metrics;
+
     @Value("${spring.kafka.bootstrap-servers}")
     String bootstrapServers;
 
@@ -53,7 +59,7 @@ class BookingFlowIT extends AbstractIntegrationTest {
         var booking = body(response);
         assertThat(booking.get("status").asString()).isEqualTo("PENDING_PAYMENT");
         assertThat(booking.get("amountCents").asLong()).isEqualTo(60000);
-        assertThat(seatMap(show).get("summary").get("HELD").asInt()).isEqualTo(2);
+        awaitSeatCount(show, "HELD", 2);
 
         try (var probe = new KafkaProbe(bootstrapServers, Topics.BOOKING_CREATED)) {
             String bookingId = booking.get("id").asString();
@@ -144,7 +150,13 @@ class BookingFlowIT extends AbstractIntegrationTest {
                 new PaymentCompleted(UUID.randomUUID(), bookingId, UUID.randomUUID(), 20000, Instant.now()));
 
         await().atMost(Duration.ofSeconds(20)).until(() -> bookingStatus(bookingId).equals("CONFIRMED"));
-        assertThat(seatMap(show).get("summary").get("BOOKED").asInt()).isEqualTo(2);
+        awaitSeatCount(show, "BOOKED", 2);
+        try (var probe = new KafkaProbe(bootstrapServers, Topics.BOOKING_CONFIRMED)) {
+            var confirmed = json.readValue(probe.awaitValue(bookingId.toString(), Duration.ofSeconds(20)),
+                    BookingConfirmed.class);
+            assertThat(confirmed.userId()).isEqualTo("frank");
+            assertThat(confirmed.seatIds()).containsExactlyElementsOf(seats);
+        }
     }
 
     @Test
@@ -157,8 +169,36 @@ class BookingFlowIT extends AbstractIntegrationTest {
                 new PaymentFailed(UUID.randomUUID(), bookingId, "Card declined", Instant.now()));
 
         await().atMost(Duration.ofSeconds(20)).until(() -> bookingStatus(bookingId).equals("CANCELLED"));
-        assertThat(seatMap(show).get("summary").get("AVAILABLE").asInt()).isEqualTo(1);
+        awaitSeatCount(show, "AVAILABLE", 1);
         assertThat(book(show, "heidi", unique("key"), seat).getStatusCode().value()).isEqualTo(201);
+        try (var probe = new KafkaProbe(bootstrapServers, Topics.BOOKING_CANCELLED)) {
+            var cancelled = json.readValue(probe.awaitValue(bookingId.toString(), Duration.ofSeconds(20)),
+                    BookingCancelled.class);
+            assertThat(cancelled.reason()).isEqualTo("Card declined");
+        }
+    }
+
+    @Test
+    void seatMapIsServedFromTheCacheAndRefreshesWithinASecond() {
+        long show = createShow(1, 3, 10000);
+        double hitsBefore = cacheRequests("hit");
+        double missesBefore = cacheRequests("miss");
+
+        seatMap(show);
+        seatMap(show);
+        seatMap(show);
+
+        assertThat(cacheRequests("miss") - missesBefore).isEqualTo(1);
+        assertThat(cacheRequests("hit") - hitsBefore).isEqualTo(2);
+
+        Long seat = seatIds(show).getFirst();
+        book(show, "ken", unique("key"), seat);
+
+        awaitSeatCount(show, "HELD", 1);
+    }
+
+    private double cacheRequests(String result) {
+        return metrics.counter("seatmap.cache.requests", "result", result).count();
     }
 
     @Test

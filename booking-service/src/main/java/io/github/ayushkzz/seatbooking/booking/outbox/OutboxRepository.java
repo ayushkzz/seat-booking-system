@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.Query;
 
 interface OutboxRepository extends JpaRepository<OutboxEvent, UUID> {
 
+    long countByPublishedAtIsNull();
+
     @Query(value = """
             select * from outbox_events
             where published_at is null

@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -29,11 +31,15 @@ class OutboxRelay {
     private final TransactionTemplate tx;
     private final Clock clock;
 
-    OutboxRelay(OutboxRepository outbox, KafkaTemplate<String, String> kafka, TransactionTemplate tx, Clock clock) {
+    OutboxRelay(OutboxRepository outbox, KafkaTemplate<String, String> kafka, TransactionTemplate tx, Clock clock,
+                MeterRegistry metrics) {
         this.outbox = outbox;
         this.kafka = kafka;
         this.tx = tx;
         this.clock = clock;
+        Gauge.builder("outbox.pending", outbox, OutboxRepository::countByPublishedAtIsNull)
+                .description("Events written to the outbox but not yet acknowledged by Kafka")
+                .register(metrics);
     }
 
     @Scheduled(fixedDelayString = "${booking.outbox-poll-interval}")

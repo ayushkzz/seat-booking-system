@@ -9,6 +9,9 @@ import io.github.ayushkzz.seatbooking.booking.hold.SeatHoldService;
 import io.github.ayushkzz.seatbooking.booking.outbox.OutboxWriter;
 import io.github.ayushkzz.seatbooking.booking.show.SeatRepository;
 import io.github.ayushkzz.seatbooking.booking.show.SeatStatus;
+import io.github.ayushkzz.seatbooking.common.events.BookingCancelled;
+import io.github.ayushkzz.seatbooking.common.events.BookingConfirmed;
+import io.github.ayushkzz.seatbooking.common.events.BookingExpired;
 import io.github.ayushkzz.seatbooking.common.events.PaymentCompleted;
 import io.github.ayushkzz.seatbooking.common.events.PaymentFailed;
 import io.github.ayushkzz.seatbooking.common.events.RefundRequested;
@@ -57,8 +60,12 @@ public class BookingLifecycleService {
         }
         switch (booking.getStatus()) {
             case PENDING_PAYMENT -> {
+                Instant now = clock.instant();
                 moveSeats(booking, SeatStatus.HELD, SeatStatus.BOOKED);
-                booking.confirm(clock.instant());
+                booking.confirm(now);
+                outbox.enqueue(Topics.BOOKING_CONFIRMED, booking.getId(), new BookingConfirmed(
+                        UUID.randomUUID(), booking.getId(), booking.getShowId(), booking.getUserId(),
+                        booking.getSeatIds(), booking.getAmountCents(), now));
                 releaseHoldsAfterCommit(booking);
                 metrics.confirmed();
             }
@@ -77,8 +84,11 @@ public class BookingLifecycleService {
         if (booking == null || booking.getStatus() != BookingStatus.PENDING_PAYMENT) {
             return;
         }
+        Instant now = clock.instant();
         moveSeats(booking, SeatStatus.HELD, SeatStatus.AVAILABLE);
-        booking.cancel(clock.instant());
+        booking.cancel(now);
+        outbox.enqueue(Topics.BOOKING_CANCELLED, booking.getId(), new BookingCancelled(
+                UUID.randomUUID(), booking.getId(), booking.getShowId(), booking.getUserId(), event.reason(), now));
         releaseHoldsAfterCommit(booking);
         metrics.cancelled();
         log.info("Booking {} cancelled: {}", booking.getId(), event.reason());
@@ -92,6 +102,8 @@ public class BookingLifecycleService {
         for (Booking booking : overdue) {
             moveSeats(booking, SeatStatus.HELD, SeatStatus.AVAILABLE);
             booking.expire(now);
+            outbox.enqueue(Topics.BOOKING_EXPIRED, booking.getId(), new BookingExpired(
+                    UUID.randomUUID(), booking.getId(), booking.getShowId(), booking.getUserId(), now));
             releaseHoldsAfterCommit(booking);
             metrics.expired();
         }

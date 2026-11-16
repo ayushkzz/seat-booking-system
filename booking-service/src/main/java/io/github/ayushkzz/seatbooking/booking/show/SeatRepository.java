@@ -9,7 +9,11 @@ import org.springframework.data.jpa.repository.Query;
 
 public interface SeatRepository extends JpaRepository<Seat, Long> {
 
-    List<Seat> findByShowIdOrderById(long showId);
+    /** Reads only the columns the seat map needs, without loading entities. */
+    @Query("""
+            select new io.github.ayushkzz.seatbooking.booking.show.SeatView(s.id, s.label, s.status, s.priceCents)
+            from Seat s where s.showId = :showId order by s.id""")
+    List<SeatView> seatMap(long showId);
 
     long countByShowId(long showId);
 
