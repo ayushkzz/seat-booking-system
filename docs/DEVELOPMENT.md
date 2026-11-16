@@ -26,13 +26,20 @@ cd seat-booking-system
 
 ### 1. Everything in Docker
 
-The quickest way to see it working. Builds both services and starts them with their infrastructure.
+The quickest way to see it working. Builds the gateway and the three services and starts them with their infrastructure.
 
 ```bash
 docker compose up -d --build
 ```
 
-The booking API is on http://localhost:8080 and payment-service on http://localhost:8081. Stop it with:
+The API is served through the gateway on http://localhost:8000. To also get Prometheus and the
+Grafana dashboard (http://localhost:3000, no login), add the monitoring profile:
+
+```bash
+docker compose --profile monitoring up -d --build
+```
+
+Stop it with:
 
 ```bash
 docker compose down
@@ -52,9 +59,9 @@ PostgreSQL, Redis and Kafka are now on their default ports on localhost, which i
 services look by default, so no configuration is needed. Then either:
 
 - **VS Code:** open the folder, install the recommended extensions when prompted, and start
-  **Both services** from the Run and Debug panel (`.vscode/launch.json`).
-- **IntelliJ IDEA:** open the folder as a Maven project and run `BookingServiceApplication` and
-  `PaymentServiceApplication`.
+  **All services** from the Run and Debug panel (`.vscode/launch.json`).
+- **IntelliJ IDEA:** open the folder as a Maven project and run `BookingServiceApplication`,
+  `PaymentServiceApplication`, `NotificationServiceApplication` and `GatewayApplication`.
 - **Terminal:**
 
   ```bash
@@ -68,6 +75,17 @@ services look by default, so no configuration is needed. Then either:
   ```bash
   java -jar payment-service/target/payment-service.jar
   ```
+
+  ```bash
+  java -jar notification-service/target/notification-service.jar
+  ```
+
+  ```bash
+  java -jar gateway/target/gateway.jar
+  ```
+
+You only need the services you are working on: booking-service runs fine alone, but bookings stay
+`PENDING_PAYMENT` without payment-service.
 
 ## Try the API
 
@@ -121,13 +139,26 @@ ITEST_LOCAL=true ./mvnw verify
 Test classes ending in `Test` are unit tests (Surefire). Classes ending in `IT` are integration
 tests (Failsafe) and run in the `verify` phase.
 
+## Load test
+
+```bash
+./scripts/load-test.sh
+```
+
+Starts a fresh stack, runs the k6 load test and checks the data afterwards. It takes about five
+minutes. Details and results are in [LOAD_TEST.md](LOAD_TEST.md).
+
 ## Ports and connections
 
 | What | Address | Credentials |
 | --- | --- | --- |
-| Booking API | http://localhost:8080 | |
+| Gateway (use this for the API) | http://localhost:8000 | |
+| booking-service | http://localhost:8080 | |
 | payment-service | http://localhost:8081 | |
-| PostgreSQL | `localhost:5432` | databases `bookings` (user/password `booking`) and `payments` (user/password `payment`) |
+| notification-service | http://localhost:8082 | |
+| Grafana (monitoring profile) | http://localhost:3000 | no login |
+| Prometheus (monitoring profile) | http://localhost:9090 | |
+| PostgreSQL | `localhost:5432` | databases `bookings`, `payments` and `notifications`; user and password are `booking`, `payment` and `notification` |
 | Redis | `localhost:6379` | |
 | Kafka | `localhost:9092` | |
 | Health | `/actuator/health` on each service | |
@@ -152,15 +183,19 @@ docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-s
 
 ## Configuration
 
-Both services read their settings from environment variables, with defaults for local use.
+The services read their settings from environment variables, with defaults for local use.
 
 | Variable | Default | Used by |
 | --- | --- | --- |
-| `PORT` | `8080` / `8081` | both |
-| `DB_URL`, `DB_USER`, `DB_PASSWORD` | local PostgreSQL | both |
-| `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | booking-service |
-| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | both |
+| `PORT` | `8000`, `8080`, `8081`, `8082` | all |
+| `DB_URL`, `DB_USER`, `DB_PASSWORD` | local PostgreSQL | booking, payment, notification |
+| `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | booking-service, gateway |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | booking, payment, notification |
+| `SEAT_MAP_CACHE_TTL` | `PT1S` | booking-service |
 | `PAYMENT_FAILURE_RATE` | `0.1` | payment-service |
+| `BOOKING_SERVICE_URL`, `NOTIFICATION_SERVICE_URL` | `http://localhost:8080`, `http://localhost:8082` | gateway |
+| `RATE_LIMIT_BOOKINGS_PER_SECOND`, `RATE_LIMIT_BOOKINGS_BURST` | `5`, `10` | gateway |
+| `RATE_LIMIT_PER_SECOND`, `RATE_LIMIT_BURST` | `50`, `100` | gateway |
 
 Other settings (seat hold time, expiry scan interval, simulated payment latency) are in each
 service's `src/main/resources/application.yml`.
@@ -180,9 +215,11 @@ service's `src/main/resources/application.yml`.
 
 | Problem | Fix |
 | --- | --- |
-| `port is already allocated` | Something else is using 5432, 6379, 9092, 8080 or 8081. Stop it, or change the left side of the port mapping in `docker-compose.yml`. |
+| `port is already allocated` | Something else is using 5432, 6379, 9092, 8000 or 8080–8082. Stop it, or change the left side of the port mapping in `docker-compose.yml`. |
 | Tests fail with `Could not find a valid Docker environment` | Docker isn't running. Start Docker Desktop and retry. |
 | Service fails at startup with a Flyway validation error | The local database has an older schema. Reset it with `docker compose down -v`. |
 | `./mvnw: Permission denied` (Linux/macOS) | `chmod +x mvnw` |
 | `mvnw` or a script fails with `\r: command not found` | The file was checked out with Windows line endings. Run `git add --renormalize . && git checkout -- .` |
+| Requests return `429 Too Many Requests` | The gateway's rate limit. Slow down, call the service directly on its own port, or raise the `RATE_LIMIT_*` settings. |
+| Seat map doesn't show a booking you just made | Seat maps are cached for one second. Ask again. |
 | Booking stays `PENDING_PAYMENT` | payment-service isn't running, or can't reach Kafka. Check its log. Unpaid bookings expire after 5 minutes. |
