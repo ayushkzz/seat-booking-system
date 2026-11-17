@@ -9,6 +9,8 @@ GATEWAY_URL="${GATEWAY_URL:-http://localhost:8000}"
 BOOKING_URL="${BOOKING_URL:-http://localhost:8080}"
 PAYMENT_URL="${PAYMENT_URL:-http://localhost:8081}"
 NOTIFICATION_URL="${NOTIFICATION_URL:-http://localhost:8082}"
+# The web app is only checked when it is running, unless REQUIRE_FRONTEND=1 (as in CI).
+FRONTEND_URL="${FRONTEND_URL:-http://localhost:5173}"
 RUN_ID="$(date +%s)-$RANDOM"
 
 pass() { printf '  \033[32m✔\033[0m %s\n' "$1"; }
@@ -109,7 +111,43 @@ read -r code body < <(post_booking "$show_id" "smoke-$RUN_ID" "key-4" "$seat3")
 [ "$code" = 201 ] || fail "released seat should be bookable again, got $code"
 pass "released seat could be booked again"
 
-# 5. The gateway limits how fast one client can create bookings.
+# 5. Waiting room: only one user at a time may book this show.
+queue_show=$(curl -fs -X POST "$GATEWAY_URL/api/shows" -H 'Content-Type: application/json' \
+  -d '{"title":"Smoke Test Rush","venue":"CI","startsAt":"2099-01-01T19:30:00Z","rows":1,"seatsPerRow":4,"priceCents":25000,"waitingRoomCapacity":1}' | jq -r .id)
+queue_seat=$(curl -fs "$GATEWAY_URL/api/shows/$queue_show/seats" | jq -r '.seats[0].id')
+join_queue() { curl -fs -X POST "$GATEWAY_URL/api/shows/$queue_show/queue" -H 'Content-Type: application/json' -d "{\"userId\":\"$1\"}"; }
+first=$(join_queue "first-$RUN_ID"); second=$(join_queue "second-$RUN_ID")
+[ "$(jq -r .status <<<"$first")" = ADMITTED ] && [ "$(jq -r '"\(.status) \(.position)"' <<<"$second")" = "WAITING 1" ] \
+  || fail "expected the first user to be admitted and the second to wait at position 1"
+pass "waiting room admitted the first user and queued the second"
+read -r code body < <(post_booking "$queue_show" "second-$RUN_ID" "key-5" "$queue_seat")
+[ "$code" = 403 ] || fail "booking without an admitted ticket should be refused with 403, got $code"
+pass "booking without a turn refused with 403"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$GATEWAY_URL/api/shows/$queue_show/bookings" \
+  -H 'Content-Type: application/json' -H "Idempotency-Key: key-6" -H "X-Queue-Ticket: $(jq -r .ticketId <<<"$first")" \
+  -d "{\"userId\":\"first-$RUN_ID\",\"seatIds\":[$queue_seat]}")
+[ "$code" = 201 ] || fail "admitted user should be able to book, got $code"
+status=WAITING
+for _ in $(seq 1 20); do
+  status=$(curl -fs "$GATEWAY_URL/api/shows/$queue_show/queue/$(jq -r .ticketId <<<"$second")" | jq -r .status)
+  [ "$status" = ADMITTED ] && break
+  sleep 0.5
+done
+[ "$status" = ADMITTED ] || fail "the second user should be admitted once the first has booked"
+pass "admitted user booked, and the next user in line was let in"
+
+# 6. The web app is served and can reach the API through its own origin.
+if curl -fs -m 5 -o /tmp/smoke-frontend "$FRONTEND_URL/"; then
+  grep -q '<div id="root">' /tmp/smoke-frontend || fail "the web app page at $FRONTEND_URL looks wrong"
+  [ "$(curl -fs "$FRONTEND_URL/api/shows" | jq 'length > 0')" = true ] || fail "the web app cannot reach the API"
+  pass "web app is served and reaches the API"
+elif [ "${REQUIRE_FRONTEND:-0}" = 1 ]; then
+  fail "the web app is not reachable at $FRONTEND_URL"
+else
+  echo "  - web app not running at $FRONTEND_URL, skipped"
+fi
+
+# 7. The gateway limits how fast one client can create bookings.
 limited=0
 for i in $(seq 1 40); do
   read -r code body < <(post_booking "$show_id" "burst-$RUN_ID" "burst-$i" "$seat1")
