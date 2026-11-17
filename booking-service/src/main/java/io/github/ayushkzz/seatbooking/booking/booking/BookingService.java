@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import io.github.ayushkzz.seatbooking.booking.api.ApiException;
@@ -15,6 +16,7 @@ import io.github.ayushkzz.seatbooking.booking.outbox.OutboxWriter;
 import io.github.ayushkzz.seatbooking.booking.show.SeatRepository;
 import io.github.ayushkzz.seatbooking.booking.show.SeatStatus;
 import io.github.ayushkzz.seatbooking.booking.show.ShowRepository;
+import io.github.ayushkzz.seatbooking.booking.waitingroom.WaitingRoomService;
 import io.github.ayushkzz.seatbooking.common.events.BookingCreated;
 import io.github.ayushkzz.seatbooking.common.events.Topics;
 import org.springframework.stereotype.Service;
@@ -40,6 +42,7 @@ public class BookingService {
     private final SeatRepository seats;
     private final BookingRepository bookings;
     private final SeatHoldService holds;
+    private final WaitingRoomService waitingRoom;
     private final IdempotencyGuard idempotency;
     private final OutboxWriter outbox;
     private final TransactionTemplate tx;
@@ -48,12 +51,13 @@ public class BookingService {
     private final Clock clock;
 
     BookingService(ShowRepository shows, SeatRepository seats, BookingRepository bookings, SeatHoldService holds,
-                   IdempotencyGuard idempotency, OutboxWriter outbox, TransactionTemplate tx,
+                   WaitingRoomService waitingRoom, IdempotencyGuard idempotency, OutboxWriter outbox, TransactionTemplate tx,
                    BookingMetrics metrics, BookingProperties props, Clock clock) {
         this.shows = shows;
         this.seats = seats;
         this.bookings = bookings;
         this.holds = holds;
+        this.waitingRoom = waitingRoom;
         this.idempotency = idempotency;
         this.outbox = outbox;
         this.tx = tx;
@@ -65,7 +69,11 @@ public class BookingService {
     public record Result(Booking booking, boolean created) {
     }
 
-    public Result create(long showId, String idempotencyKey, String userId, List<Long> requestedSeatIds) {
+    /**
+     * @param queueTicket the caller's waiting room ticket; only needed for shows with a waiting room
+     */
+    public Result create(long showId, String idempotencyKey, String userId, List<Long> requestedSeatIds,
+                         String queueTicket) {
         List<Long> seatIds = requestedSeatIds.stream().distinct().sorted().toList();
         String lock = idempotency.tryLock(userId, idempotencyKey).orElseThrow(ApiException::idempotencyKeyInUse);
         try {
@@ -79,6 +87,9 @@ public class BookingService {
             if (seats.countByShowIdAndIdIn(showId, seatIds) != seatIds.size()) {
                 throw ApiException.seatsNotFound(showId);
             }
+            // Shows with a waiting room only take bookings from users whose turn it is. A booking
+            // uses up the turn, so the next person in the queue can come in.
+            Optional<UUID> admission = waitingRoom.requireAdmission(showId, userId, queueTicket);
 
             UUID bookingId = UUID.randomUUID();
             if (!holds.hold(showId, seatIds, bookingId, props.holdTtl().plus(HOLD_GRACE))) {
@@ -88,6 +99,7 @@ public class BookingService {
             try {
                 Booking booking = tx.execute(status -> persist(bookingId, showId, userId, idempotencyKey, seatIds));
                 metrics.created();
+                admission.ifPresent(ticket -> waitingRoom.endSession(showId, ticket));
                 return new Result(booking, true);
             } catch (RuntimeException e) {
                 holds.release(showId, seatIds, bookingId);

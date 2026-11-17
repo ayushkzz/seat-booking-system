@@ -40,6 +40,26 @@ public class ApiException extends RuntimeException {
                 "One or more of the requested seats are already held or booked.");
     }
 
+    public static ApiException noWaitingRoom(long showId) {
+        return new ApiException(HttpStatus.BAD_REQUEST, "no-waiting-room",
+                "Show " + showId + " has no waiting room. Book directly.");
+    }
+
+    public static ApiException queueTicketNotFound() {
+        return new ApiException(HttpStatus.NOT_FOUND, "queue-ticket-not-found",
+                "This place in the queue no longer exists. Join the waiting room again.");
+    }
+
+    public static ApiException admissionRequired() {
+        return new ApiException(HttpStatus.FORBIDDEN, "admission-required",
+                "This show has a waiting room. Join it and send your ticket in the X-Queue-Ticket header.");
+    }
+
+    public static ApiException notAdmitted() {
+        return new ApiException(HttpStatus.FORBIDDEN, "not-admitted",
+                "This queue ticket has not been admitted yet, has expired, or belongs to another user.");
+    }
+
     public static ApiException idempotencyKeyInUse() {
         return new ApiException(HttpStatus.CONFLICT, "idempotency-key-in-use",
                 "A request with this Idempotency-Key is still being processed. Retry shortly.");

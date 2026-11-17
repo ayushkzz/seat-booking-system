@@ -26,13 +26,17 @@ public class Show {
     @Column(nullable = false)
     private Instant startsAt;
 
+    /** Max users choosing seats at once; null when the show has no waiting room. */
+    private Integer waitingRoomCapacity;
+
     protected Show() {
     }
 
-    public Show(String title, String venue, Instant startsAt) {
+    public Show(String title, String venue, Instant startsAt, Integer waitingRoomCapacity) {
         this.title = title;
         this.venue = venue;
         this.startsAt = startsAt;
+        this.waitingRoomCapacity = waitingRoomCapacity;
     }
 
     public Long getId() {
@@ -49,5 +53,9 @@ public class Show {
 
     public Instant getStartsAt() {
         return startsAt;
+    }
+
+    public Integer getWaitingRoomCapacity() {
+        return waitingRoomCapacity;
     }
 }

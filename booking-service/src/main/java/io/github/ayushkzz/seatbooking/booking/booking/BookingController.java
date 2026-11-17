@@ -51,8 +51,9 @@ class BookingController {
     @PostMapping("/shows/{showId}/bookings")
     ResponseEntity<BookingResponse> create(@PathVariable long showId,
                                            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 100) String key,
+                                           @RequestHeader(value = "X-Queue-Ticket", required = false) String queueTicket,
                                            @Valid @RequestBody CreateBookingRequest request) {
-        var result = bookings.create(showId, key, request.userId(), request.seatIds());
+        var result = bookings.create(showId, key, request.userId(), request.seatIds(), queueTicket);
         var body = BookingResponse.of(result.booking());
         return result.created()
                 ? ResponseEntity.created(URI.create("/api/bookings/" + body.id())).body(body)

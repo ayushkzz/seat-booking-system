@@ -1,6 +1,7 @@
 package io.github.ayushkzz.seatbooking.booking;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -94,11 +95,39 @@ public abstract class AbstractIntegrationTest {
 
     /** Creates a fresh show so every test works on its own seats. */
     protected long createShow(int rows, int seatsPerRow, long priceCents) {
+        return createShow(rows, seatsPerRow, priceCents, null);
+    }
+
+    /** @param waitingRoomCapacity how many users may book at once, or null for no waiting room */
+    protected long createShow(int rows, int seatsPerRow, long priceCents, Integer waitingRoomCapacity) {
+        Map<String, Object> request = new HashMap<>(Map.of("title", "Test show", "venue", "Test hall",
+                "startsAt", "2099-01-01T19:30:00Z", "rows", rows, "seatsPerRow", seatsPerRow,
+                "priceCents", priceCents));
+        if (waitingRoomCapacity != null) {
+            request.put("waitingRoomCapacity", waitingRoomCapacity);
+        }
         var response = http().post().uri("/api/shows").contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("title", "Test show", "venue", "Test hall", "startsAt", "2099-01-01T19:30:00Z",
-                        "rows", rows, "seatsPerRow", seatsPerRow, "priceCents", priceCents))
-                .retrieve().toEntity(String.class);
+                .body(request).retrieve().toEntity(String.class);
         return body(response).get("id").asLong();
+    }
+
+    protected JsonNode joinQueue(long showId, String userId) {
+        return body(http().post().uri("/api/shows/{id}/queue", showId).contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("userId", userId)).retrieve().toEntity(String.class));
+    }
+
+    protected ResponseEntity<String> queueStatus(long showId, String ticketId) {
+        return http().get().uri("/api/shows/{id}/queue/{ticket}", showId, ticketId).retrieve().toEntity(String.class);
+    }
+
+    protected ResponseEntity<String> bookWithTicket(long showId, String userId, String ticketId, Long... seatIds) {
+        var request = http().post().uri("/api/shows/{id}/bookings", showId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Idempotency-Key", unique("key"));
+        if (ticketId != null) {
+            request = request.header("X-Queue-Ticket", ticketId);
+        }
+        return request.body(Map.of("userId", userId, "seatIds", List.of(seatIds))).retrieve().toEntity(String.class);
     }
 
     protected List<Long> seatIds(long showId) {

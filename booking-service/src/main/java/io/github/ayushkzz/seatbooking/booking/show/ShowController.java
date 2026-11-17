@@ -2,6 +2,7 @@ package io.github.ayushkzz.seatbooking.booking.show;
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Future;
@@ -38,16 +39,24 @@ class ShowController {
             @NotNull @Future Instant startsAt,
             @Min(1) @Max(26) int rows,
             @Min(1) @Max(50) int seatsPerRow,
-            @PositiveOrZero long priceCents) {
+            @PositiveOrZero long priceCents,
+            @Min(1) Integer waitingRoomCapacity) {
     }
 
-    record ShowResponse(long id, String title, String venue, Instant startsAt, long totalSeats) {
+    /** @param waitingRoomCapacity null when anyone can book without queueing */
+    record ShowResponse(long id, String title, String venue, Instant startsAt, long totalSeats,
+                        Integer waitingRoomCapacity) {
+    }
+
+    @GetMapping
+    List<ShowResponse> upcoming() {
+        return shows.upcoming().stream().map(this::response).toList();
     }
 
     @PostMapping
     ResponseEntity<ShowResponse> create(@Valid @RequestBody CreateShowRequest request) {
         Show show = shows.create(request.title(), request.venue(), request.startsAt(), request.rows(),
-                request.seatsPerRow(), request.priceCents());
+                request.seatsPerRow(), request.priceCents(), request.waitingRoomCapacity());
         return ResponseEntity.created(URI.create("/api/shows/" + show.getId())).body(response(show));
     }
 
@@ -63,6 +72,6 @@ class ShowController {
 
     private ShowResponse response(Show show) {
         return new ShowResponse(show.getId(), show.getTitle(), show.getVenue(), show.getStartsAt(),
-                shows.seatCount(show.getId()));
+                shows.seatCount(show.getId()), show.getWaitingRoomCapacity());
     }
 }

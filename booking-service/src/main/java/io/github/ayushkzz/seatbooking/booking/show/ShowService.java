@@ -21,8 +21,9 @@ public class ShowService {
 
     /** Creates a show with a rectangular seat map: rows A, B, C... and seats 1..seatsPerRow. */
     @Transactional
-    public Show create(String title, String venue, Instant startsAt, int rows, int seatsPerRow, long priceCents) {
-        Show show = shows.save(new Show(title, venue, startsAt));
+    public Show create(String title, String venue, Instant startsAt, int rows, int seatsPerRow, long priceCents,
+                       Integer waitingRoomCapacity) {
+        Show show = shows.save(new Show(title, venue, startsAt, waitingRoomCapacity));
         List<Seat> layout = new ArrayList<>(rows * seatsPerRow);
         for (int row = 0; row < rows; row++) {
             for (int number = 1; number <= seatsPerRow; number++) {
@@ -31,6 +32,12 @@ public class ShowService {
         }
         seats.saveAll(layout);
         return show;
+    }
+
+    /** Upcoming shows, soonest first. */
+    @Transactional(readOnly = true)
+    public List<Show> upcoming() {
+        return shows.findTop100ByStartsAtAfterOrderByStartsAt(Instant.now());
     }
 
     @Transactional(readOnly = true)

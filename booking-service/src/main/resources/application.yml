@@ -55,6 +55,13 @@ booking:
   outbox-poll-interval: PT0.1S
   # How long a rendered seat map is served from Redis, i.e. how stale a seat map can be.
   seat-map-cache-ttl: ${SEAT_MAP_CACHE_TTL:PT1S}
+  waiting-room:
+    # How long an admitted user has to make a booking before their place goes to the next in line.
+    session-ttl: ${WAITING_ROOM_SESSION_TTL:PT3M}
+    # A waiting user who has not checked their position for this long is dropped from the queue.
+    heartbeat-ttl: PT30S
+    # How often free places are handed to the users at the front of the queue.
+    admit-interval: PT1S
 
 management:
   endpoints:
