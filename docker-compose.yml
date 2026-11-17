@@ -1,6 +1,6 @@
 # Full stack: PostgreSQL, Redis, Kafka (KRaft), the gateway and the three services.
 #   docker compose up -d --build
-# The API is served through the gateway on http://localhost:8000.
+# Open the app on http://localhost:5173. The API is served through the gateway on http://localhost:8000.
 #
 # With Prometheus (http://localhost:9090) and Grafana (http://localhost:3000):
 #   docker compose --profile monitoring up -d --build
@@ -125,6 +125,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - gateway
 
   prometheus:
     image: prom/prometheus:v3.5.0
