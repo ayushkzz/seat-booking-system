@@ -16,8 +16,14 @@ fail or arrive too late, and services that must stay consistent without distribu
 - **Transactional outbox.** A booking and its `booking.created` event are committed together, so the database and Kafka never disagree.
 - **Saga with compensation.** Payment success confirms the booking, a decline releases the seats, and a payment that arrives after the hold expired triggers a refund.
 - **Self-healing holds.** Unpaid bookings expire automatically and their seats return to sale.
+- **Virtual waiting room.** High-demand shows let only a few users choose seats at a time. Everyone else waits in a fair first-come, first-served queue and is let in automatically.
+- **Web app.** A React front end with a live seat map, the waiting room, booking progress and notifications.
 - **API gateway with rate limiting.** One entry point; each client gets a Redis token bucket, with a stricter limit on creating bookings.
 - **Measured, not assumed.** A k6 load test holds 500 requests/s at a booking p95 of 154 ms on a single 4-vCPU machine, then verifies zero double bookings and that three separate databases agree exactly. See [the results](docs/LOAD_TEST.md).
+
+| Waiting room | Your turn |
+| --- | --- |
+| ![Waiting in the queue for a high-demand show](docs/images/app-waiting-room.png) | ![Choosing seats once admitted](docs/images/app-your-turn.png) |
 
 ![Grafana dashboard during a load test](docs/images/grafana-load-test.png)
 
@@ -25,7 +31,8 @@ fail or arrive too late, and services that must stay consistent without distribu
 
 ```mermaid
 flowchart LR
-    client([Client])
+    client([Browser])
+    web[Web app<br/>React, served by nginx]
     gateway[API gateway<br/>routing, rate limits]
     subgraph booking-service
         api[REST API]
@@ -34,13 +41,14 @@ flowchart LR
     end
     pay[payment-service]
     notify[notification-service]
-    redis[(Redis<br/>seat holds, seat map cache,<br/>rate limit buckets)]
+    redis[(Redis<br/>seat holds, waiting room,<br/>seat map cache, rate limits)]
     bookingsDb[(PostgreSQL<br/>bookings)]
     paymentsDb[(PostgreSQL<br/>payments)]
     notificationsDb[(PostgreSQL<br/>notifications)]
     kafka{{Kafka}}
 
-    client -->|HTTP| gateway
+    client --> web
+    web -->|/api| gateway
     gateway --> api
     gateway --> notify
     gateway -.-> redis
@@ -62,8 +70,9 @@ by booking id, so all events for one booking are processed in order.
 
 | Service | Port | Responsibility |
 | --- | --- | --- |
+| frontend | 5173 | The web app. Serves the React build and forwards `/api` to the gateway. |
 | gateway | 8000 | Single entry point. Routes requests and rate-limits each client. |
-| booking-service | 8080 | Shows, seat maps, seat holds, bookings, the outbox and the saga. |
+| booking-service | 8080 | Shows, seat maps, the waiting room, seat holds, bookings, the outbox and the saga. |
 | payment-service | 8081 | Simulated payment provider. Charges each booking at most once, and refunds. |
 | notification-service | 8082 | Turns booking events into notifications, once per event. |
 
@@ -90,6 +99,46 @@ together they stay correct even when one of them fails.
 | **Atomic seat hold** | Redis Lua script | Holds *all* requested seats or none, in one atomic step. Rejects most conflicts in about a millisecond, without touching the database. Keys use a `{show:id}` hash tag so a show's seats share one Redis Cluster slot. |
 | **Compare-and-set** | PostgreSQL | `UPDATE seats SET status='HELD' WHERE id IN (...) AND status='AVAILABLE'`. If fewer rows change than requested, the transaction rolls back. This is the source of truth: even if Redis loses a hold, a seat can't be sold twice (covered by a test that deletes the Redis keys). |
 
+## The waiting room
+
+When a popular show goes on sale, thousands of people arrive in the same second. Letting them all
+at the seat map at once means almost everyone clicks a seat that is already gone. A show can
+instead set a capacity: how many users may be choosing seats at the same time.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as booking-service
+    participant R as Redis
+    U->>B: POST /shows/{id}/queue
+    B->>R: add ticket to the queue, admit if a place is free
+    B-->>U: WAITING, position 12
+    loop every 2 seconds
+        U->>B: GET /shows/{id}/queue/{ticket}
+        B-->>U: WAITING, position 7 ... 1
+    end
+    Note over B,R: someone books, leaves, or their turn runs out
+    B->>R: admit the next ticket (atomic Lua script)
+    U->>B: GET /shows/{id}/queue/{ticket}
+    B-->>U: ADMITTED, turn ends in 3 minutes
+    U->>B: POST /shows/{id}/bookings with X-Queue-Ticket
+    B-->>U: 201, turn used up, next user admitted
+```
+
+- **Fair.** The queue is a Redis sorted set ordered by arrival number, so users are admitted strictly first come, first served.
+- **Never over capacity.** Ending expired turns and admitting the next users is one Lua script. Two instances running it at once still cannot let in more users than the capacity.
+- **No ghosts.** A waiting ticket expires unless its owner keeps checking their position, so people who closed the tab are skipped instead of wasting a turn.
+- **Enforced on the server.** Bookings for such a show are refused with `403` unless the request carries a ticket that is admitted right now and belongs to that user. A successful booking ends the turn, which lets the next person in immediately.
+
+Try it with a crowd: open http://localhost:5173, pick *Stadium Tour: Opening Night*, and run
+
+```bash
+./scripts/simulate-crowd.sh
+```
+
+25 pretend users join the queue ahead of or behind you, get in three at a time, and buy seats while
+your position counts down.
+
 ## Reliability patterns
 
 - **Transactional outbox.** `booking.created` is written to an `outbox_events` table in the same transaction as the booking. A relay publishes pending rows to Kafka, waits for the acknowledgement, then marks them as sent. Rows are claimed with `FOR UPDATE SKIP LOCKED`, so several instances can relay in parallel.
@@ -104,11 +153,15 @@ together they stay correct even when one of them fails.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/api/shows` | Create a show with a rows × seats layout |
+| `GET` | `/api/shows` | Upcoming shows |
+| `POST` | `/api/shows` | Create a show with a rows × seats layout, optionally with a `waitingRoomCapacity` |
 | `GET` | `/api/shows/{id}` | Show details |
 | `GET` | `/api/shows/{id}/seats` | Seat map with a summary per status |
-| `POST` | `/api/shows/{id}/bookings` | Hold seats and start payment. Needs an `Idempotency-Key` header. `201` new, `200` replay, `409` seat taken |
+| `POST` | `/api/shows/{id}/bookings` | Hold seats and start payment. Needs an `Idempotency-Key` header. `201` new, `200` replay, `409` seat taken, `403` not your turn (shows with a waiting room need the `X-Queue-Ticket` header) |
 | `GET` | `/api/bookings/{id}` | Booking status |
+| `POST` | `/api/shows/{id}/queue` | Join the show's waiting room. Returns a ticket with `WAITING` and a position, or `ADMITTED` |
+| `GET` | `/api/shows/{id}/queue/{ticketId}` | The ticket's place in the queue. Poll it; it also keeps the place alive |
+| `DELETE` | `/api/shows/{id}/queue/{ticketId}` | Leave the queue or give up the turn |
 | `GET` | `/api/users/{userId}/notifications` | The user's 50 most recent notifications |
 
 All of it is served through the gateway on port 8000. A client that sends requests too fast gets `429 Too Many Requests`.
@@ -130,6 +183,8 @@ Errors use [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem responses 
 ```bash
 docker compose up -d --build
 ```
+
+Then open **http://localhost:5173** for the web app, or use the API directly:
 
 ```bash
 # Seat map of the demo show (10 rows × 20 seats)
@@ -172,6 +227,7 @@ The integration tests start the whole service against real PostgreSQL, Redis and
 - payment completed → confirmed, payment failed → seats released
 - hold expiry, then a late payment → refund requested
 - payment-service charging once per booking under redelivery, declines and refunds
+- the waiting room: capacity is respected, the queue keeps its order, a booking admits the next user, turns expire, and absent users are skipped
 - notification-service notifying once per event under redelivery
 - gateway routing, and `429` once a client exceeds its booking rate
 
@@ -208,7 +264,7 @@ docker compose --profile monitoring up -d --build
 
 adds Prometheus (http://localhost:9090) and Grafana (http://localhost:3000, no login) with a
 ready-made dashboard: booking outcomes, rejected seat conflicts by layer, API latency percentiles,
-gateway traffic and rate limiting, cache hit rate, payments, notifications, Kafka consumer lag,
+gateway traffic and rate limiting, cache hit rate, the waiting room, payments, notifications, Kafka consumer lag,
 outbox backlog, database connections, CPU and heap.
 
 Every service exposes `/actuator/health` (with liveness and readiness probes) and
@@ -224,8 +280,9 @@ booking-service/       shows, seat holds, bookings, outbox relay, saga handlers,
 payment-service/       simulated payment provider; idempotent charges and refunds
 notification-service/  notifications from booking events, once per event
 gateway/               Spring Cloud Gateway: routing and Redis rate limiting
+frontend/              React + TypeScript web app (Vite), served by nginx in Docker
 loadtest/              k6 load test
-scripts/               end-to-end smoke test and load test runner
+scripts/               end-to-end smoke test, load test runner, crowd simulator for demos
 postman/               Postman collection that walks through the booking saga
 docs/                  local development guide, load test results
 docker/                PostgreSQL init script, Prometheus and Grafana configuration
@@ -235,8 +292,8 @@ docker/                PostgreSQL init script, Prometheus and Grafana configurat
 
 Java 21 (virtual threads) · Spring Boot 4 · Spring Cloud Gateway · Spring Data JPA / Hibernate ·
 Flyway · Spring Kafka · Spring Data Redis · PostgreSQL 16 · Redis 7 · Apache Kafka 4 (KRaft) ·
-Micrometer · Prometheus · Grafana · k6 · JUnit 5 · Testcontainers · Awaitility · Docker Compose ·
-GitHub Actions
+Micrometer · Prometheus · Grafana · k6 · JUnit 5 · Testcontainers · Awaitility · React 19 · TypeScript ·
+Vite · nginx · Docker Compose · GitHub Actions
 
 The gateway runs on Spring Boot 4.0 and the other services on 4.1, because Spring Cloud Gateway
 has no stable release for Boot 4.1 yet.
@@ -245,5 +302,5 @@ has no stable release for Boot 4.1 yet.
 
 - Real email or SMS delivery behind the `NotificationSender` interface
 - User accounts and authentication at the gateway (JWT), instead of a `userId` in the request
-- A waiting room that queues users when a show goes on sale
+- Push seat and queue updates to the browser (Server-Sent Events) instead of polling
 - Kubernetes manifests with horizontal scaling of booking-service

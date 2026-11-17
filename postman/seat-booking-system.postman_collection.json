@@ -403,6 +403,123 @@
           }
         }
       ]
+    },
+    {
+      "name": "Waiting room: join the queue",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{gatewayUrl}}/api/shows/2/queue",
+        "description": "Show 2 (Stadium Tour) lets 3 users choose seats at a time. Returns ADMITTED if a place is free, otherwise WAITING with your position.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"ayush\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('queueTicket', pm.response.json().ticketId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Waiting room: check my place",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/api/shows/2/queue/{{queueTicket}}",
+        "description": "Send this every few seconds while waiting. It also keeps your place: a ticket that is not checked for 30 seconds is dropped."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('waiting or admitted', () => pm.expect(pm.response.json().status).to.be.oneOf(['WAITING', 'ADMITTED']));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Waiting room: book with my ticket",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          },
+          {
+            "key": "X-Queue-Ticket",
+            "value": "{{queueTicket}}"
+          }
+        ],
+        "url": "{{gatewayUrl}}/api/shows/2/bookings",
+        "description": "Works once the ticket is ADMITTED (403 before that). Seat ids of show 2 start after the 200 seats of show 1; change the id if this seat is taken (409).",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": \"ayush\",\n  \"seatIds\": [250]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201, or 403 while still waiting, or 409 if the seat is taken', () => pm.expect(pm.response.code).to.be.oneOf([201, 403, 409]));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Waiting room: leave",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": "{{gatewayUrl}}/api/shows/2/queue/{{queueTicket}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

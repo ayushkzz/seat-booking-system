@@ -8,6 +8,7 @@ Everything you need to clone the project and work on it on your own machine.
 | --- | --- | --- |
 | JDK | 21 or newer | [Eclipse Temurin](https://adoptium.net) works well. Check with `java -version`. |
 | Docker | Docker Desktop, or Docker Engine with Compose v2 | Runs PostgreSQL, Redis and Kafka, and the integration tests. |
+| Node.js | 22 or newer | Only needed to work on the front end outside Docker. |
 | Git | any recent | |
 
 Maven does not need to be installed: the `mvnw` wrapper downloads the right version on first use.
@@ -32,7 +33,8 @@ The quickest way to see it working. Builds the gateway and the three services an
 docker compose up -d --build
 ```
 
-The API is served through the gateway on http://localhost:8000. To also get Prometheus and the
+Open the web app on **http://localhost:5173**. The API is served through the gateway on
+http://localhost:8000. To also get Prometheus and the
 Grafana dashboard (http://localhost:3000, no login), add the monitoring profile:
 
 ```bash
@@ -86,6 +88,38 @@ services look by default, so no configuration is needed. Then either:
 
 You only need the services you are working on: booking-service runs fine alone, but bookings stay
 `PENDING_PAYMENT` without payment-service.
+
+## Working on the front end
+
+The web app lives in `frontend/` (React, TypeScript, Vite). Start the backend with either option
+above, then run the development server, which reloads on every change:
+
+```bash
+cd frontend
+```
+
+```bash
+npm install
+```
+
+```bash
+npm run dev
+```
+
+It serves the app on http://localhost:5173 and forwards `/api` to the gateway on port 8000, so
+stop the `frontend` container first if the full Docker stack is running
+(`docker compose stop frontend`). `npm run build` type-checks and builds the production bundle.
+
+There are no accounts: the name in the top bar is sent as the `userId`. Open a second browser
+profile or change the name to act as another user.
+
+To see the waiting room under pressure, open *Stadium Tour: Opening Night* and run:
+
+```bash
+./scripts/simulate-crowd.sh
+```
+
+It sends 25 pretend users into the queue (`./scripts/simulate-crowd.sh <showId> <users>` to change that).
 
 ## Try the API
 
@@ -152,6 +186,7 @@ minutes. Details and results are in [LOAD_TEST.md](LOAD_TEST.md).
 
 | What | Address | Credentials |
 | --- | --- | --- |
+| Web app | http://localhost:5173 | |
 | Gateway (use this for the API) | http://localhost:8000 | |
 | booking-service | http://localhost:8080 | |
 | payment-service | http://localhost:8081 | |
@@ -192,6 +227,7 @@ The services read their settings from environment variables, with defaults for l
 | `REDIS_HOST`, `REDIS_PORT` | `localhost`, `6379` | booking-service, gateway |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | booking, payment, notification |
 | `SEAT_MAP_CACHE_TTL` | `PT1S` | booking-service |
+| `WAITING_ROOM_SESSION_TTL` | `PT3M` | booking-service |
 | `PAYMENT_FAILURE_RATE` | `0.1` | payment-service |
 | `BOOKING_SERVICE_URL`, `NOTIFICATION_SERVICE_URL` | `http://localhost:8080`, `http://localhost:8082` | gateway |
 | `RATE_LIMIT_BOOKINGS_PER_SECOND`, `RATE_LIMIT_BOOKINGS_BURST` | `5`, `10` | gateway |
@@ -215,11 +251,12 @@ service's `src/main/resources/application.yml`.
 
 | Problem | Fix |
 | --- | --- |
-| `port is already allocated` | Something else is using 5432, 6379, 9092, 8000 or 8080–8082. Stop it, or change the left side of the port mapping in `docker-compose.yml`. |
+| `port is already allocated` | Something else is using 5173, 5432, 6379, 9092, 8000 or 8080–8082. Stop it, or change the left side of the port mapping in `docker-compose.yml`. |
 | Tests fail with `Could not find a valid Docker environment` | Docker isn't running. Start Docker Desktop and retry. |
 | Service fails at startup with a Flyway validation error | The local database has an older schema. Reset it with `docker compose down -v`. |
 | `./mvnw: Permission denied` (Linux/macOS) | `chmod +x mvnw` |
 | `mvnw` or a script fails with `\r: command not found` | The file was checked out with Windows line endings. Run `git add --renormalize . && git checkout -- .` |
 | Requests return `429 Too Many Requests` | The gateway's rate limit. Slow down, call the service directly on its own port, or raise the `RATE_LIMIT_*` settings. |
 | Seat map doesn't show a booking you just made | Seat maps are cached for one second. Ask again. |
+| Booking returns `403` | The show has a waiting room. Join the queue and send the admitted ticket in `X-Queue-Ticket`. |
 | Booking stays `PENDING_PAYMENT` | payment-service isn't running, or can't reach Kafka. Check its log. Unpaid bookings expire after 5 minutes. |
